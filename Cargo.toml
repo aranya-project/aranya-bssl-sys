@@ -1,0 +1,33 @@
+[package]
+name = "bssl-sys"
+version = "0.1.0"
+authors = ["SpiderOak, Inc."]
+license = "MIT"
+description = "BoringSSL FFI bindings"
+repository = "https://github.com/spideroak-inc/bssl"
+links = "boringssl"
+readme = "README.md"
+categories = ["cryptography", "external-ffi-bindings"]
+edition = "2021"
+include = [
+    "/*.md",
+    "/*.toml",
+    "/LICENSE-MIT",
+    "/deps/boringssl/**/*.[chS]",
+    "/deps/boringssl/**/*.asm",
+    "/deps/boringssl/src/**/*.cc",
+    "/deps/boringssl/**/CMakeLists.txt",
+    "/deps/boringssl/**/sources.cmake",
+    "/deps/boringssl/LICENSE",
+    "/build.rs",
+    "/src",
+]
+
+[features]
+# Build the SSL part of BoringSSL.
+ssl = []
+
+[build-dependencies]
+bindgen = { version = "0.65", default-features = false, features = ["runtime"] }
+cfg-if = { version = "1.0" }
+cmake = { version = "0.1" }
