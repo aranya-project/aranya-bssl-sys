@@ -50,10 +50,16 @@ const BSSL_INCLUDE_PATH_VAR: &str = "BSSL_INCLUDE_PATH";
 /// The env var that has the git hash we checkout if neither
 /// BSSL_PRECOMPILED_PATH nor BSSL_SOURCE_PATH are provided.
 const BSSL_GIT_HASH_VAR: &str = "BSSL_GIT_HASH";
+/// The env var that tells us whether to skip checking out
+/// `BSSL_GIT_HASH`.
+const BSSL_GIT_NO_CHECKOUT_VAR: &str = "BSSL_GIT_NO_CHECKOUT";
 /// The git hash we checkout if BSSL_GIT_HASH is unset.
 ///
 /// This is master as of 2023/05/08.
 const BSSL_GIT_HASH: &str = "a972b78d1b11009cd07852fb4be2cc938489e031";
+/// The env var that has the path to `malloc.patch` for patching
+/// `OPENSSL_memory_alloc`, etc.
+const BSSL_MALLOC_PATCH_PATH_VAR: &str = "BSSL_MALLOC_PATCH_PATH";
 /// The directory the baked-in BoringSSL sources are cloned into.
 const BSSL_DEPS_PATH: &str = if cfg!(fips) {
     "deps/boringssl-fips"
@@ -221,7 +227,8 @@ where
                 "x86" => {
                     cfg.define(
                         "CMAKE_TOOLCHAIN_FILE",
-                        pwd.join(BSSL_DEPS_PATH)
+                        pwd.join(env::var("OUT_DIR")?)
+                            .join(BSSL_DEPS_PATH)
                             .join("src")
                             .join("util")
                             .join("32-bit-toolchain.cmake")
@@ -249,6 +256,7 @@ where
     if look_path("ninja").is_some() {
         cfg.generator("Ninja");
     }
+    cfg.very_verbose(true);
 
     match env::var("OPT_LEVEL")?.as_str() {
         "0" => {
@@ -392,6 +400,7 @@ enum Sources {
 }
 
 fn find_bssl_sources() -> Result<Sources> {
+    // Do we have precompiled sources?
     println!("cargo:rerun-if-env-changed={BSSL_PRECOMPILED_PATH_VAR}");
     if let Ok(dir) = env::var(BSSL_PRECOMPILED_PATH_VAR) {
         let path = Path::new(&dir);
@@ -400,6 +409,8 @@ fn find_bssl_sources() -> Result<Sources> {
         }
     }
 
+    // Did the user provide us with a custom path to the raw
+    // sources?
     println!("cargo:rerun-if-env-changed={BSSL_SOURCE_PATH_VAR}");
     if let Ok(dir) = env::var(BSSL_SOURCE_PATH_VAR) {
         let path = Path::new(&dir);
@@ -408,25 +419,41 @@ fn find_bssl_sources() -> Result<Sources> {
         }
     }
 
+    // Do we have the git repo locally?
     println!("cargo:rerun-if-env-changed={BSSL_GIT_HASH}");
-    let path = Path::new(BSSL_DEPS_PATH);
+    let path = Path::new(&env::var("OUT_DIR")?).join(BSSL_DEPS_PATH);
     if !path.join("CMakeLists.txt").exists() {
         println!("cargo:warning=fetching BoringSSL");
         Command::new("git")
             .arg("clone")
             .arg("https://boringssl.googlesource.com/boringssl")
-            .arg(BSSL_DEPS_PATH)
-            .status()?
-            .exit_ok()?;
-        let hash = env::var(BSSL_GIT_HASH_VAR).unwrap_or(BSSL_GIT_HASH.to_owned());
-        Command::new("git")
-            .arg("checkout")
-            .arg(hash)
-            .current_dir(BSSL_DEPS_PATH)
+            .arg(&path)
             .status()?
             .exit_ok()?;
     }
-    Ok(Sources::Raw(path.to_owned()))
+
+    println!("cargo:rerun-if-env-changed={BSSL_GIT_NO_CHECKOUT_VAR}");
+    match env::var(BSSL_GIT_NO_CHECKOUT_VAR) {
+        Ok(v) if v == "1" => {
+            // Make sure we're at the correct commit.
+            Command::new("git")
+                .arg("reset")
+                .arg("--hard")
+                .arg("head")
+                .current_dir(&path)
+                .status()?
+                .exit_ok()?;
+            let hash = env::var(BSSL_GIT_HASH_VAR).unwrap_or(BSSL_GIT_HASH.to_owned());
+            Command::new("git")
+                .arg("checkout")
+                .arg(hash)
+                .current_dir(&path)
+                .status()?
+                .exit_ok()?;
+        }
+        _ => {}
+    }
+    Ok(Sources::Raw(path))
 }
 
 fn into_string<P>(path: P) -> String
@@ -489,8 +516,41 @@ fn main() -> Result<()> {
                 cfg.define("CMAKE_ASM_COMPILER", clang);
                 cfg.define("FIPS", "1");
             }
+            match env::var("CARGO_CFG_TARGET_OS")?.as_ref() {
+                // See src/lib.rs.
+                "aix" | "ios" | "macos" | "tvos" | "windows" => {
+                    let patch_path = match env::var(BSSL_MALLOC_PATCH_PATH_VAR) {
+                        Ok(path) => path,
+                        Err(_) => into_string(Path::new(&env::current_dir()?).join("malloc.patch")),
+                    };
+                    let res = Command::new("git")
+                        .arg("apply")
+                        .arg("--reverse")
+                        .arg("--check")
+                        .arg(&patch_path)
+                        .current_dir(dir.clone())
+                        .status()?
+                        .exit_ok();
+                    if res.is_err() {
+                        // We couldn't reverse the patch, so
+                        // let's assume it hasn't been applied
+                        // yet.
+                        Command::new("git")
+                            .arg("apply")
+                            .arg("--ignore-space-change")
+                            .arg("--ignore-whitespace")
+                            .arg(&patch_path)
+                            .current_dir(dir.clone())
+                            .status()?
+                            .exit_ok()?;
+                    }
+                }
+                _ => {}
+            }
+
             #[cfg(feature = "ssl")]
             cfg.build_target("ssl").build();
+
             let build_dir = cfg.build_target("crypto").build();
             (dir, build_dir)
         }
@@ -508,6 +568,7 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "ssl")]
     println!("cargo:rustc-link-lib=static=ssl");
+
     println!("cargo:rustc-link-lib=static=crypto");
 
     if env::var("CARGO_CFG_TARGET_OS")? == "macos" {
@@ -560,46 +621,101 @@ fn main() -> Result<()> {
     }
 
     let headers = [
+        "aead.h",
         "aes.h",
+        "arm_arch.h",
+        "asn1.h",
         "asn1_mac.h",
         "asn1t.h",
+        "base.h",
+        "base64.h",
+        "bio.h",
         #[cfg(not(fips))]
         "blake2.h",
         "blowfish.h",
+        "bn.h",
+        "buf.h",
+        "buffer.h",
+        "bytestring.h",
         "cast.h",
         "chacha.h",
+        "cipher.h",
         "cmac.h",
+        "conf.h",
         "cpu.h",
+        "crypto.h",
+        "ctrdrbg.h",
         "curve25519.h",
         "des.h",
+        "dh.h",
+        "digest.h",
+        "dsa.h",
         "dtls1.h",
+        "e_os2.h",
+        "ec.h",
+        "ec_key.h",
+        "ecdh.h",
+        "ecdsa.h",
+        "engine.h",
+        "err.h",
+        "evp.h",
+        "evp_errors.h",
+        "ex_data.h",
         "hkdf.h",
+        "hmac.h",
+        "hpke.h",
         "hrss.h",
+        "is_boringssl.h",
+        "kdf.h",
+        "kyber.h",
+        "lhash.h",
         "md4.h",
         "md5.h",
+        "mem.h",
+        "nid.h",
+        "obj.h",
         "obj_mac.h",
         "objects.h",
+        "opensslconf.h",
         "opensslv.h",
         "ossl_typ.h",
+        "pem.h",
         "pkcs12.h",
+        "pkcs7.h",
+        "pkcs8.h",
         "poly1305.h",
+        "pool.h",
         "rand.h",
         "rc4.h",
         "ripemd.h",
+        "rsa.h",
+        "safestack.h",
+        "service_indicator.h",
+        "sha.h",
         "siphash.h",
+        "span.h",
         "srtp.h",
+        "ssl.h",
+        "ssl3.h",
+        "stack.h",
+        "thread.h",
+        "time.h",
+        "tls1.h",
         #[cfg(not(fips))]
         "trust_token.h",
+        "type_check.h",
+        "x509.h",
+        "x509_vfy.h",
         "x509v3.h",
     ];
     for header in &headers {
         builder = builder.header(include_path.join("openssl").join(header).to_str().unwrap());
     }
 
-    let bindings = builder.generate().expect("Unable to generate bindings");
+    let bindings = builder.generate().expect("unable to generate bindings");
     let out_path = PathBuf::from(env::var("OUT_DIR")?);
     bindings
         .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+        .expect("unable to write bindings");
     Ok(())
 }

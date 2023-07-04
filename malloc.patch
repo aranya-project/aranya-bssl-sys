@@ -1,0 +1,13 @@
+diff --git a/crypto/mem.c b/crypto/mem.c
+index 4905caf7f..dcbf449e2 100644
+--- a/crypto/mem.c
++++ b/crypto/mem.c
+@@ -98,7 +98,7 @@ static void __asan_unpoison_memory_region(const void *addr, size_t size) {}
+ #define WEAK_SYMBOL_FUNC(rettype, name, args) \
+   rettype name args __attribute__((weak));
+ #else
+-#define WEAK_SYMBOL_FUNC(rettype, name, args) static rettype(*name) args = NULL;
++#define WEAK_SYMBOL_FUNC(rettype, name, args) rettype(*name) args = NULL;
+ #endif
+ 
+ // sdallocx is a sized |free| function. By passing the size (which we happen to

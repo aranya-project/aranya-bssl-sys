@@ -31,3 +31,4 @@ ssl = []
 bindgen = { version = "0.65", default-features = false, features = ["runtime"] }
 cfg-if = { version = "1.0" }
 cmake = { version = "0.1" }
+memchr = { version = "2" }
