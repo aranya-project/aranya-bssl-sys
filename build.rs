@@ -433,25 +433,22 @@ fn find_bssl_sources() -> Result<Sources> {
     }
 
     println!("cargo:rerun-if-env-changed={BSSL_GIT_NO_CHECKOUT_VAR}");
-    match env::var(BSSL_GIT_NO_CHECKOUT_VAR) {
-        Ok(v) if v == "1" => {
-            // Make sure we're at the correct commit.
-            Command::new("git")
-                .arg("reset")
-                .arg("--hard")
-                .arg("head")
-                .current_dir(&path)
-                .status()?
-                .exit_ok()?;
-            let hash = env::var(BSSL_GIT_HASH_VAR).unwrap_or(BSSL_GIT_HASH.to_owned());
-            Command::new("git")
-                .arg("checkout")
-                .arg(hash)
-                .current_dir(&path)
-                .status()?
-                .exit_ok()?;
-        }
-        _ => {}
+    if env::var(BSSL_GIT_NO_CHECKOUT_VAR).as_deref() != Ok("1") {
+        // Make sure we're at the correct commit.
+        Command::new("git")
+            .arg("reset")
+            .arg("--hard")
+            .arg("HEAD")
+            .current_dir(&path)
+            .status()?
+            .exit_ok()?;
+        let hash = env::var(BSSL_GIT_HASH_VAR).unwrap_or(BSSL_GIT_HASH.to_owned());
+        Command::new("git")
+            .arg("checkout")
+            .arg(hash)
+            .current_dir(&path)
+            .status()?
+            .exit_ok()?;
     }
     Ok(Sources::Raw(path))
 }

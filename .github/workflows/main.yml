@@ -59,4 +59,4 @@ jobs:
         with:
           gh-token: ${{ secrets.CC_BUILD_TOKEN }}
       - name: Build code
-        run: cargo build --verbose
+        run: cargo build --verbose --release
