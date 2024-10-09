@@ -80,7 +80,7 @@ pub const fn ERR_GET_REASON(l: c_uint) -> c_int {
     (l & 0xFFF) as c_int
 }
 
-//// Initialize BoringSSL.
+/// Initialize BoringSSL.
 ///
 /// This function must be called before using any library
 /// routines.

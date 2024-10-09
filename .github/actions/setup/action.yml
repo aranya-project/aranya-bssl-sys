@@ -1,17 +1,37 @@
-name: 'Setup build tools'
-description: 'Action for setting up build tools'
+name: "Setup build tools"
+description: "Action for setting up build tools"
 inputs:
   gh-token:
-    description: 'GitHub Access Token'
+    description: "github.com Access Token"
+    required: true
+  ghe-token:
+    description: "git.spideroak-inc.com Access Token"
     required: true
   go-version:
-    description: 'Go version'
+    description: "Go version"
     required: true
-    default: 'stable'
+    default: "stable"
+  runner:
+    description: "OS being used (e.g., macos-latest)"
+    required: true
 runs:
   using: "composite"
   steps:
-    - name: Install system dependencies
+    # Our runners don't get wiped between runs :/
+    - name: nuke old .gitconfig
+      run: rm ~/.gitconfig || true
+      shell: bash
+
+    - name: Set up git
+      run: |
+        git config --global --replace-all url."https://${{ inputs.gh-token }}@github.com/".insteadOf 'https://github.com/'
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+      shell: bash
+
+      # There is a bug in the version of GCC that ships with our
+      # arm64 runners that prevents BoringSSL from compiling. So,
+      # use Clang instead.
+    - name: Install arm64/amd64 system dependencies
       run: |
         set -x
 
@@ -23,6 +43,7 @@ runs:
           clang-12 \
           clang-tools-12 \
           cmake \
+          libunwind-dev \
           libc++-12-dev \
           libc++abi-12-dev \
           libclang-12-dev \
@@ -30,74 +51,93 @@ runs:
           llvm-12 \
           llvm-12-dev \
           lld-12 \
-          ninja-build
+          ninja-build \
+          pkg-config
 
           echo "CC=$(which clang-12)" >> $GITHUB_ENV
           echo "CXX=$GITHUB_WORKSPACE/clang++12" >> $GITHUB_ENV
           echo "LD=$(which lld-12)" >> $GITHUB_ENV
       shell: bash
-      if: ${{ matrix.os == 'self-hosted-linux-arm64' }}
+      if: ${{ inputs.runner == 'self-hosted-linux-arm64' || inputs.runner == 'self-hosted-linux-amd64' }}
 
-    - name: Set up git
+    #
+    # Set up Rust
+    #
+    - name: Install Rust
       run: |
-        git config --global url."https://${{ inputs.gh-token }}@github.com/".insteadOf https://github.com/
-        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+        cat<<EOF>>rustup.sh.sha256
+        32a680a84cf76014915b3f8aa44e3e40731f3af92cd45eb0fcc6264fd257c428  rustup.sh
+        EOF
+        wget 'https://sh.rustup.rs' -O rustup.sh
+        shasum -c rustup.sh.sha256
+        chmod +x ./rustup.sh
+        ./rustup.sh -y --default-toolchain none
+        source "$HOME/.cargo/env"
+        echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+        rustup \
+          toolchain \
+          install stable \
+          --profile minimal \
+          --allow-downgrade \
+          --component cargo \
+          --component clippy \
+          --component rustfmt
       shell: bash
-
-    - name: Cache Rust
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      if: ${{ matrix.os != 'self-hosted-linux-arm64' }}
-
-    - name: Install Rustup
-      uses: spideroak-inc/setup-rust@fork
     # Various runners have a 64-bit kernel with a 32-bit userspace.
     # Setting rustup's default host to armv7 allows using the 32-bit executables.
     - name: Set rustup's host
+      run: |
+        rustup set default-host armv7-unknown-linux-gnueabihf
+        rustup show active-toolchain
       shell: bash
-      run: rustup set default-host armv7-unknown-linux-gnueabihf
-      if: ${{ matrix.os == 'self-hosted-linux-arm' }}
-    - name: Verify toolchain
-      shell: bash
-      run: rustup show active-toolchain
-      if: ${{ matrix.os == 'self-hosted-linux-arm' }}
+      if: ${{ inputs.runner == 'self-hosted-linux-arm' }}
     - name: cargo version
       shell: bash
-      run: cargo --version --verbose
+      run: |
+        file cargo
+        cargo --version --verbose
     - name: glibc version
       shell: bash
       run: ldd --version
-      if: ${{ matrix.os == 'self-hosted-linux-arm' }}
-    - name: Intall cargo-all-features
-      run: cargo install --force cargo-all-features
+      if: ${{ inputs.runner == 'self-hosted-linux-arm' }}
+
+    - name: Install sccache
+      uses: spideroak-inc/sccache-action@main
+      with:
+        version: "v0.7.7"
+
+    - name: Configure sccache
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Install cargo-all-features
+      run: cargo install cargo-all-features --locked --version '1.10.0'
       shell: bash
 
     # BoringSSL uses Go.
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
+        token: ${{ inputs.gh-token }}
         go-version: ${{ inputs.go-version }}
         check-latest: true
+
     - name: Export GO_VERSION
       run: |
         echo "GO_VERSION=${{ inputs.go-version }}" >> $GITHUB_ENV
-        go env -w "GONOPROXY=github.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
-        go env -w "GONOSUMDB=github.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
-        go env -w "GOPRIVATE=github.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
+        go env -w "GONOPROXY=git.spideroak-inc.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
+        go env -w "GONOSUMDB=git.spideroak-inc.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
+        go env -w "GOPRIVATE=git.spideroak-inc.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
       shell: bash
-      if: ${{ matrix.os != 'windows-latest' }}
+      if: ${{ inputs.runner != 'windows-latest' }}
     - name: Export GO_VERSION
       run: |
         echo "GO_VERSION=${{ inputs.go-version }}" >> $env:GITHUB_ENV
-        go env -w "GONOPROXY=github.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
-        go env -w "GONOSUMDB=github.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
-        go env -w "GOPRIVATE=github.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
+        go env -w "GONOPROXY=git.spideroak-inc.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
+        go env -w "GONOSUMDB=git.spideroak-inc.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
+        go env -w "GOPRIVATE=git.spideroak-inc.com/spideroak-inc/*,*.spideroak.com,*.spideroak-ms.com"
       shell: pwsh
-      if: ${{ matrix.os == 'windows-latest' }}
+      if: ${{ inputs.runner == 'windows-latest' }}

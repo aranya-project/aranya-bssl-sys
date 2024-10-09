@@ -69,7 +69,7 @@ const BSSL_DEPS_PATH: &str = if cfg!(fips) {
 
 fn cmake_params_android() -> &'static [(&'static str, &'static str)] {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let cmake_params_android = if cfg!(feature = "ndk-old-gcc") {
+    let cmake_params_android = if cfg!(ndk_old_gcc) {
         CMAKE_PARAMS_ANDROID_NDK_OLD_GCC
     } else {
         CMAKE_PARAMS_ANDROID_NDK
@@ -502,7 +502,7 @@ fn main() -> Result<()> {
         Sources::Raw(dir) => {
             println!("cargo:warning=compiling BoringSSL at {:?}", dir);
             let mut cfg = boringssl_cmake_config(dir.clone())?;
-            if cfg!(feature = "fuzzing") {
+            if cfg!(fuzzing) {
                 cfg.cxxflag("-DBORINGSSL_UNSAFE_DETERMINISTIC_MODE")
                     .cxxflag("-DBORINGSSL_UNSAFE_FUZZER_MODE");
             }
