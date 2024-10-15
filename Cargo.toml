@@ -12,15 +12,11 @@ edition = "2021"
 include = [
     "/*.md",
     "/*.toml",
-    "/LICENSE-MIT",
-    "/deps/boringssl/**/*.[chS]",
-    "/deps/boringssl/**/*.asm",
-    "/deps/boringssl/src/**/*.cc",
-    "/deps/boringssl/**/CMakeLists.txt",
-    "/deps/boringssl/**/sources.cmake",
-    "/deps/boringssl/LICENSE",
+    "/LICENSE",
     "/build.rs",
-    "/src",
+    "/cmake/",
+    "/malloc.patch",
+    "/src/",
 ]
 
 [features]
